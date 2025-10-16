@@ -1,0 +1,61 @@
+import os
+import chainlit as cl
+from llama_index.core import (
+    VectorStoreIndex,
+    StorageContext,
+    load_index_from_storage,
+    SimpleDirectoryReader,
+)
+from llama_parse import LlamaParse
+
+PERSIST_DIR = "./storage"
+PDF_PATH = r"C:\Users\great\OneDrive\Documents\plp_cordinators_guide.pdf"
+
+def load_or_build_index():
+    # Ensure the persist directory exists
+    os.makedirs(PERSIST_DIR, exist_ok=True)
+    
+    docstore_file = os.path.join(PERSIST_DIR, "docstore.json")
+    vector_file = os.path.join(PERSIST_DIR, "vector_store.json")
+    index_file = os.path.join(PERSIST_DIR, "index_store.json")  # Add this for completeness
+
+    # Only load if ALL key files exist
+    if (
+        os.path.isfile(docstore_file)
+        and os.path.isfile(vector_file)
+        and os.path.isfile(index_file)
+    ):
+        print("🔄 Loading existing index...")
+        storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
+        return load_index_from_storage(storage_context)
+
+    # Otherwise, build from scratch
+    print("⚡ Building new index from file...")
+    if os.getenv("LLAMA_CLOUD_API_KEY"):
+        parser = LlamaParse(
+            api_key=os.getenv("LLAMA_CLOUD_API_KEY"),
+            result_type="markdown",
+            verbose=True
+        )
+        docs = parser.load_data(PDF_PATH)
+    else:
+        docs = SimpleDirectoryReader(input_files=[PDF_PATH]).load_data()
+
+    # Create a new, empty storage context (no persist_dir here to avoid loading attempts)
+    storage_context = StorageContext.from_defaults()
+    index = VectorStoreIndex.from_documents(docs, storage_context=storage_context)
+    
+    # Persist the new index to disk
+    index.storage_context.persist(persist_dir=PERSIST_DIR)
+    print("✅ Index built and saved.")
+    return index
+
+
+# Load or build index at startup
+index = load_or_build_index()
+query_engine = index.as_query_engine(similarity_top_k=3)
+
+@cl.on_message
+async def main(message: cl.Message):
+    response = query_engine.query(message.content)
+    await cl.Message(content=str(response)).send()
